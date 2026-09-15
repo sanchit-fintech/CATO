@@ -1,0 +1,359 @@
+Last login: Tue Sep 15 12:13:07 on console
+❯ mkdir -p ~/Cato
+cd ~/Cato
+  UW PICO 5.09                                                                              New Buffer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                   [ Read 1 line ]
+^G Get Help                   ^O WriteOut                   ^R Read File                  ^Y Prev Pg                    ^K Cut Text                   ^C Cur Pos
+^X Exit                       ^J Justify                    ^W Where is                   ^V Next Pg                    ^U UnCut Text                 ^T To Spell
+
+mkdir -p \
+  core \
+  agents \
+  tools \
+  memory \
+  interfaces \
+  config \
+  logs \
+  tests
+
+touch README.md
+touch .gitignore
+
+git init
+Initialized empty Git repository in /Users/neerajjain/Cato/.git/
+  UW PICO 5.09                                                                              New Buffer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                   [ Read 1 line ]
+^G Get Help                   ^O WriteOut                   ^R Read File                  ^Y Prev Pg                    ^K Cut Text                   ^C Cur Pos
+^X Exit                       ^J Justify                    ^W Where is                   ^V Next Pg                    ^U UnCut Text                 ^T To Spell
+❯ cd ~/Cato
+pwd
+find . -maxdepth 2 -type d | sort
+/Users/neerajjain/Cato
+.
+./.git
+./.git/hooks
+  UW PICO 5.09                                                                              New Buffer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                   [ Read 1 line ]
+^G Get Help                   ^O WriteOut                   ^R Read File                  ^Y Prev Pg                    ^K Cut Text                   ^C Cur Pos
+^X Exit                       ^J Justify                    ^W Where is                   ^V Next Pg                    ^U UnCut Text                 ^T To Spell
+./.git/info
+./.git/objects
+./.git/refs
+./agents
+./config
+./core
+./interfaces
+./logs
+./memory
+./tests
+./tools
+❯ python3 --version
+Python 3.13.5
+❯ python3 -m venv .venv
+❯ source .venv/bin/activate
+❯ which python
+python --version
+pip --version
+python: aliased to python3
+Python 3.13.5
+pip 25.1.1 from /Users/neerajjain/Cato/.venv/lib/python3.13/site-packages/pip (python 3.13)
+❯ touch core/__init__.py core/cato.py core/config.py
+❯ ls -la core
+total 0
+-rw-r--r--@  1 neerajjain  staff    0 15 Sep 12:20 __init__.py
+drwxr-xr-x@  5 neerajjain  staff  160 15 Sep 12:20 .
+drwxr-xr-x@ 14 neerajjain  staff  448 15 Sep 12:18 ..
+-rw-r--r--@  1 neerajjain  staff    0 15 Sep 12:20 cato.py
+-rw-r--r--@  1 neerajjain  staff    0 15 Sep 12:20 config.py
+❯ nano core/cato.py
+❯ python core/cato.py
+  UW PICO 5.09                                                                              New Buffer
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                                  [ Read 33 lines ]
+^G Get Help                   ^O WriteOut                   ^R Read File                  ^Y Prev Pg                    ^K Cut Text                   ^C Cur Pos
+^X Exit                       ^J Justify                    ^W Where is                   ^V Next Pg                    ^U UnCut Text                 ^T To Spell
+  UW PICO 5.09                                                                          File: core/cato.py
+
+class Cato:
+    def __init__(self):
+        self.name = "Cato"
+
+    def respond(self, command: str) -> str:
+        command = command.strip()
+
+        if not command:
+            return "I didn't catch that."
+
+        return f"You said: {command}"
+
+
+def main():
+    cato = Cato()
+
+    print("Cato v0.1")
+    print("Type 'exit' to shut down.\n")
+
+    while True:
+        command = input("You: ")
+
+        if command.lower() in {"exit", "quit"}:
+            print("Cato: Shutting down.")
+            break
+
+        response = cato.respond(command)
+        print(f"Cato: {response}")
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+^G Get Help                   ^O WriteOut                   ^R Read File                  ^Y Prev Pg                    ^K Cut Text                   ^C Cur Pos
+^X Exit                       ^J Justify                    ^W Where is                   ^V Next Pg                    ^U UnCut Text                 ^T To Spellclass Cato:
+    def __init__(self):
+        self.name = "Cato"
+
+    def respond(self, command: str) -> str:
+        command = command.strip()
+
+        if not command:
+            return "I didn't catch that."
+
+        return f"You said: {command}"
+
+
+def main():
+    cato = Cato()
+
+    print("Cato v0.1")
+    print("Type 'exit' to shut down.\n")
+
+    while True:
+        command = input("You: ")
+
+        if command.lower() in {"exit", "quit"}:
+            print("Cato: Shutting down.")
+            break
+
+        response = cato.respond(command)
+        print(f"Cato: {response}")
+
+
+if __name__ == "__main__":
+    main()
+

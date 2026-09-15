@@ -1,9 +1,13 @@
 from tools.file_search import search_files
+from core.tool_registry import ToolRegistry
 
 
 class Cato:
     def __init__(self):
         self.name = "Cato"
+
+        self.tools = ToolRegistry()
+        self.tools.register("file_search", search_files)
 
     def respond(self, command: str) -> str:
         command = command.strip()
@@ -11,14 +15,13 @@ class Cato:
         if not command:
             return "I didn't catch that."
 
-        # First real capability: file search
         if "find" in command.lower() and "file" in command.lower():
             query = self._extract_search_query(command)
 
             if not query:
                 return "What should I search for?"
 
-            results = search_files(query)
+            results = self.tools.run("file_search", query=query)
 
             if not results:
                 return f"I couldn't find anything matching '{query}'."
@@ -26,11 +29,17 @@ class Cato:
             response = f"I found {len(results)} result(s):\n"
 
             for index, path in enumerate(results, start=1):
-                response += f"{index}. {path}\n"
+                response += f"{index}. {path}"
 
-            return response.rstrip()
+                if index < len(results):
+                    response += "\n"
 
-        return f"I understand your command, but I don't have a tool for it yet: {command}"
+            return response
+
+        return (
+            "I understand your command, but I don't have a tool "
+            f"for it yet: {command}"
+        )
 
     def _extract_search_query(self, command: str) -> str:
         command = command.lower()
@@ -59,7 +68,7 @@ class Cato:
 def main():
     cato = Cato()
 
-    print("Cato v0.2")
+    print("Cato v0.3")
     print("Type 'exit' to shut down.\n")
 
     while True:

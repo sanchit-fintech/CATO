@@ -11,7 +11,12 @@ from urllib.request import Request, urlopen
 
 
 class APIError(RuntimeError):
-    pass
+    def __init__(
+        self, message: str, *, code: str = "api_error", status: int | None = None
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = status
 
 
 class AgentClient(Protocol):
@@ -64,12 +69,44 @@ class HTTPAgentClient:
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:
                 raw = response.read()
-        except (HTTPError, URLError, TimeoutError, OSError) as error:
-            raise APIError("Cato's local API is unavailable.") from error
+        except HTTPError as error:
+            try:
+                body = json.loads(error.read())
+                message = body.get("error", {}).get("message")
+            except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+                message = None
+            raise APIError(
+                message or f"Cato API returned HTTP {error.code}.",
+                code="api_http_error",
+                status=error.code,
+            ) from error
+        except URLError as error:
+            reason = getattr(error, "reason", None)
+            if isinstance(reason, ConnectionRefusedError):
+                message = "No service is listening at the configured Cato API URL."
+                code = "connection_refused"
+            else:
+                message = "The configured local API could not be reached."
+                code = "connection_failed"
+            raise APIError(message, code=code) from error
+        except TimeoutError as error:
+            raise APIError(
+                "The local API request timed out.", code="api_timeout"
+            ) from error
+        except OSError as error:
+            raise APIError(
+                "The local API connection failed.", code="connection_failed"
+            ) from error
         try:
             result = json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError) as error:
-            raise APIError("Cato's API returned an invalid response.") from error
+            raise APIError(
+                "The service returned malformed JSON and may not be Cato.",
+                code="malformed_response",
+            ) from error
         if not isinstance(result, dict):
-            raise APIError("Cato's API returned an invalid response.")
+            raise APIError(
+                "The service returned an invalid response and may not be Cato.",
+                code="malformed_response",
+            )
         return result

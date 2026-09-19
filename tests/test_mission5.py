@@ -50,7 +50,7 @@ class FakeAPI:
         return next(self.responses)
 
     def health(self):
-        return {"status": "ok"}
+        return {"status": "ok", "service": "cato", "ready": True}
 
 
 def response(text="Done.", session="session-1", status="completed"):
@@ -368,6 +368,9 @@ def test_audio_permission_failure(monkeypatch) -> None:
 
 def test_audio_recording_start_stop_and_in_memory_wav(monkeypatch) -> None:
     class Chunk:
+        def astype(self, dtype):
+            return self
+
         def copy(self):
             return self
 
@@ -391,7 +394,7 @@ def test_audio_recording_start_stop_and_in_memory_wav(monkeypatch) -> None:
     monkeypatch.setitem(
         sys.modules,
         "numpy",
-        SimpleNamespace(max=lambda _: 0.5, abs=lambda value: value),
+        SimpleNamespace(max=lambda _: 600, abs=lambda value: value),
     )
     monkeypatch.setitem(
         sys.modules, "sounddevice", SimpleNamespace(InputStream=InputStream)

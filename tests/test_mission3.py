@@ -219,7 +219,9 @@ def test_api_health_chat_validation_and_reset(tmp_path: Path) -> None:
         settings=config(tmp_path),
     )
     client = TestClient(create_app(cato))
-    assert client.get("/health").json() == {"status": "ok"}
+    health = client.get("/health").json()
+    assert health["status"] == "ok"
+    assert health["service"] == "cato" and health["ready"] is True
     response = client.post("/chat", json={"message": "hi"})
     assert response.status_code == 200 and response.json()["response"] == "Hello"
     session_id = response.json()["session_id"]

@@ -91,3 +91,24 @@ and approvals are still process-local. There is no wake word or background mode.
 Mission 6 should add authenticated local clients, encrypted durable sessions,
 native menu-bar push-to-talk and approval UI, streaming transcription/TTS,
 provider lifecycle management, and auditable privacy-preserving event telemetry.
+
+## Real-world reliability sprint
+
+Real microphone testing exposed that `/health` succeeded while lazy `/chat`
+initialization failed, and every HTTP error was mislabeled as API unavailability.
+Port 8000 was verified as Cato Uvicorn, but that process had no Gemini key:
+health returned 200 while chat returned 500. Health now reports service identity
+and provider readiness, chat returns an actionable 503, and the client preserves
+connection, HTTP, malformed, stale, and non-Cato failure categories.
+
+`cato voice` now reuses a ready service or starts and owns a temporary loopback
+API. It never kills an unowned process and can select a free loopback port when a
+stale/non-Cato service occupies the configured one. `cato health` prints detailed
+voice readiness.
+
+Faster Whisper now defaults to CPU and queries CTranslate2-supported compute
+types, preferring `int8` and safely falling back to `float32`. Model loading is
+locked, happens once, and is announced before recording. The default STT timeout
+is 120 seconds. The prior audio threshold of `0.01` was incorrect for int16
+samples and treated ambient noise as speech; defaults are now threshold 500,
+1024-frame blocks, 1.2 seconds of silence, and a 12-second hard bound.

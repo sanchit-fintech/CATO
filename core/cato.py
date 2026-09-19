@@ -418,19 +418,37 @@ def main() -> None:
         run_voice_client(settings)
         return
     if mode == "health":
-        from client.api_client import APIError, HTTPAgentClient
-
         try:
-            print(HTTPAgentClient(settings.voice_client_api_url).health())
-        except APIError as error:
-            print(error)
+            from client.voice_client import build_voice_session
+
+            health = build_voice_session(settings).health()
+            print(f"Cato API: {health['api']['status']}")
+            print(f"API URL: {health['api']['url']}")
+            print(f"Microphone: {health['microphone']['status']}")
+            print(f"Audio device: {health['microphone'].get('device', 'unknown')}")
+            print(f"Audio permission: {health['microphone']['permission']}")
+            print(
+                f"STT: {health['stt']['status']} "
+                f"({health['stt'].get('provider')}, "
+                f"model={health['stt'].get('model', settings.stt_model)}, "
+                "compute="
+                f"{health['stt'].get('compute_type', settings.stt_compute_type)})"
+            )
+            print(f"TTS: {health['tts']['status']} ({health['tts']['provider']})")
+            macos_status = (
+                "available" if platform.system() == "Darwin" else "unavailable"
+            )
+            print(f"macOS support: {macos_status}")
+            print(f"Voice ready: {'yes' if health['ready'] else 'no'}")
+        except (ValueError, ConfigurationError) as error:
+            print(f"Health check failed: {error}")
         return
     if mode not in {"chat", ""}:
         print("Usage: cato [chat|voice|health]")
         return
 
     cato = Cato(settings=settings)
-    print("Cato v0.9")
+    print("Cato v0.9.1")
     print("Type 'exit' to shut down.\n")
     while True:
         try:

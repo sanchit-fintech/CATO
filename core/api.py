@@ -7,6 +7,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from core.cato import Cato
+from core.config import ConfigurationError, Settings
+
+CATO_API_VERSION = "0.9.1"
 
 
 class ChatRequest(BaseModel):
@@ -39,13 +42,41 @@ def create_app(cato: Cato | None = None) -> FastAPI:
         )
 
     @app.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+    def health() -> dict[str, object]:
+        if runtime is not None:
+            configured = True
+            provider = type(runtime.provider).__name__
+        else:
+            settings = Settings.load(require_api_key=False)
+            configured = bool(settings.gemini_api_key)
+            provider = "gemini"
+        return {
+            "status": "ok",
+            "service": "cato",
+            "version": CATO_API_VERSION,
+            "ready": configured,
+            "provider": provider,
+            "provider_configured": configured,
+        }
 
     @app.post("/chat")
-    def chat(request: ChatRequest) -> dict[str, object]:
+    def chat(request: ChatRequest):
         nonlocal runtime
-        runtime = runtime or Cato()
+        if runtime is None:
+            try:
+                runtime = Cato()
+            except ConfigurationError:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": {
+                            "code": "provider_not_configured",
+                            "message": (
+                                "Cato is running, but GEMINI_API_KEY is not configured."
+                            ),
+                        }
+                    },
+                )
         result = runtime.run(request.message, session_id=request.session_id)
         return _result(result)
 

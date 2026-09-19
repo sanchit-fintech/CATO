@@ -43,13 +43,15 @@ class SoundDeviceAudioCapture:
         silence_timeout_seconds: float = 1.5,
         sample_rate: int = 16_000,
         device: str | int | None = None,
-        silence_threshold: float = 0.01,
+        silence_threshold: float = 500,
+        block_size: int = 1024,
     ) -> None:
         self.timeout_seconds = max(0.1, timeout_seconds)
         self.silence_timeout_seconds = max(0.1, silence_timeout_seconds)
         self.sample_rate = sample_rate
         self.device = device
         self.silence_threshold = silence_threshold
+        self.block_size = max(128, block_size)
         self._cancel = threading.Event()
         self._active_stream = None
 
@@ -74,7 +76,8 @@ class SoundDeviceAudioCapture:
             del frames, callback_time, status
             nonlocal last_sound, heard_sound
             chunks.append(indata.copy().tobytes())
-            if float(np.max(np.abs(indata))) >= self.silence_threshold:
+            amplitude = float(np.max(np.abs(indata.astype("int32"))))
+            if amplitude >= self.silence_threshold:
                 heard_sound = True
                 last_sound = time.monotonic()
 
@@ -84,6 +87,7 @@ class SoundDeviceAudioCapture:
                 channels=1,
                 dtype="int16",
                 device=self.device,
+                blocksize=self.block_size,
                 callback=callback,
             ) as stream:
                 self._active_stream = stream
@@ -145,11 +149,20 @@ class SoundDeviceAudioCapture:
             return {
                 "status": "available" if available else "unavailable",
                 "permission": "unknown",
+                "device": "detected" if available else "not_found",
             }
         except ImportError:
-            return {"status": "missing_optional_dependency", "permission": "unknown"}
+            return {
+                "status": "missing_optional_dependency",
+                "permission": "unknown",
+                "device": "unknown",
+            }
         except Exception:
-            return {"status": "requires_user_action", "permission": "unknown"}
+            return {
+                "status": "requires_user_action",
+                "permission": "unknown",
+                "device": "unknown",
+            }
 
     @staticmethod
     def _audio_error_code(error: Exception) -> str:

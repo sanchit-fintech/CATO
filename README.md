@@ -76,9 +76,11 @@ Voice mode has optional local dependencies:
 python -m pip install -e '.[voice]'
 ```
 
-This installs `sounddevice`, NumPy, Faster Whisper, and Uvicorn. Faster Whisper
-downloads the configured model on first use. Core chat/API imports continue to
-work when these packages are absent.
+This installs `sounddevice`, NumPy, and Faster Whisper. The core package now
+includes Uvicorn for reliable owned API startup. Faster Whisper downloads the
+configured model on first use. Voice mode announces model
+preparation before listening, then loads it once and reuses it. Core imports
+continue to work when these packages are absent.
 
 Set `GEMINI_API_KEY` in `.env`. Configure `CATO_APPROVED_ROOTS` as a
 platform-path-separator-delimited list of narrow roots. The safe default is the
@@ -90,18 +92,27 @@ launch directory. Other settings and defaults are documented in `.env.example`.
 python -m core.cato
 ```
 
-Start the API and voice client in separate terminals:
+The recommended workflow is one command:
 
 ```bash
-uvicorn 'core.api:create_app' --factory --host 127.0.0.1 --port 8000
 cato voice
 ```
+
+Voice mode reuses a healthy loopback Cato API or starts an owned temporary API
+child and stops only that child on exit. It never terminates an unknown process.
+If the configured port contains a stale/non-Cato service and the current process
+has valid provider configuration, it selects another free loopback port.
+
+`GEMINI_API_KEY` must be available to the process starting voice mode. API health
+now distinguishes a reachable Cato service from one that cannot serve chat
+because the provider is unconfigured.
 
 Voice commands are explicit: ENTER records one utterance, `/type TEXT` provides
 typed fallback, `/reset` starts a new conversation, `/health` reports microphone,
 STT, TTS, and API capability, `/cancel` interrupts owned audio activity, and
-`/quit` exits. `cato chat` starts the original direct CLI and `cato health` checks
-the configured API.
+`/quit` exits. `cato chat` starts the original direct CLI. `cato health` reports
+API identity/readiness and URL, microphone/device visibility, STT model and
+compute type, TTS, macOS support, and overall voice readiness.
 
 To embed the API, use `core.api.create_app()`. For example, after installing an
 ASGI server of your choice:
@@ -109,6 +120,11 @@ ASGI server of your choice:
 ```bash
 uvicorn 'core.api:create_app' --factory --host 127.0.0.1 --port 8000
 ```
+
+Manual startup remains available for debugging. If it reports “address already
+in use,” run `cato health`. Cato reports whether the endpoint is ready,
+misconfigured, unreachable, malformed, or stale/non-Cato; it does not kill the
+port owner.
 
 Chat request:
 

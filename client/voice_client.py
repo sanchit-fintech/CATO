@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from client.api_client import HTTPAgentClient
+from client.service import LocalAPIManager
 from core.config import Settings
 from voice.audio import SoundDeviceAudioCapture
 from voice.session import VoiceSession
@@ -10,7 +11,41 @@ from voice.stt import FasterWhisperSTT
 from voice.tts import MacOSSayTTS
 
 
-def build_voice_session(settings: Settings) -> VoiceSession:
+def run_voice_client(settings: Settings) -> None:
+    client = HTTPAgentClient(settings.voice_client_api_url)
+    manager = LocalAPIManager(client)
+    status = manager.ensure(can_start=bool(settings.gemini_api_key))
+    if not status.ready:
+        manager.stop()
+        print(f"Cato voice could not connect: {status.message}")
+        print(f"API URL: {client.base_url}")
+        if not settings.gemini_api_key:
+            print("Configure GEMINI_API_KEY in .env before starting Cato voice.")
+        return
+    try:
+        voice = build_voice_session(settings, client=client)
+    except ValueError as error:
+        manager.stop()
+        print(f"Cato voice could not start: {error}")
+        return
+    try:
+        print("Preparing the local speech model. First use may download it...")
+        prepared = voice.stt.prepare()
+        if prepared.success:
+            compute = prepared.metadata.get("compute_type", "configured default")
+            print(f"Speech model ready ({compute}).")
+        else:
+            print(f"Speech model unavailable: {prepared.error}")
+            print("Typed fallback remains available with /type TEXT.")
+        _interactive_loop(voice)
+    finally:
+        voice.cancel()
+        manager.stop()
+
+
+def build_voice_session(
+    settings: Settings, *, client: HTTPAgentClient | None = None
+) -> VoiceSession:
     if settings.stt_provider != "faster-whisper":
         raise ValueError(f"Unsupported STT provider: {settings.stt_provider}")
     if settings.tts_provider != "macos-say":
@@ -19,11 +54,17 @@ def build_voice_session(settings: Settings) -> VoiceSession:
         timeout_seconds=settings.recording_timeout_seconds,
         silence_timeout_seconds=settings.silence_timeout_seconds,
         device=settings.microphone_device,
+        silence_threshold=settings.silence_threshold,
+        block_size=settings.audio_block_size,
     )
-    stt = FasterWhisperSTT(model=settings.stt_model)
+    stt = FasterWhisperSTT(
+        model=settings.stt_model,
+        device=settings.stt_device,
+        compute_type=settings.stt_compute_type,
+    )
     tts = MacOSSayTTS(voice=settings.tts_voice, rate=settings.tts_rate)
     return VoiceSession(
-        client=HTTPAgentClient(settings.voice_client_api_url),
+        client=client or HTTPAgentClient(settings.voice_client_api_url),
         capture=capture,
         stt=stt,
         tts=tts,
@@ -32,23 +73,16 @@ def build_voice_session(settings: Settings) -> VoiceSession:
     )
 
 
-def run_voice_client(settings: Settings) -> None:
-    try:
-        voice = build_voice_session(settings)
-    except ValueError as error:
-        print(f"Cato voice could not start: {error}")
-        return
+def _interactive_loop(voice: VoiceSession) -> None:
     print("Cato Voice")
     print("ENTER: speak | /type TEXT | /reset | /health | /cancel | /quit")
     while True:
         try:
             command = input("voice> ").strip()
         except (EOFError, KeyboardInterrupt):
-            voice.cancel()
             print("\nVoice client stopped.")
             return
         if command == "/quit":
-            voice.cancel()
             return
         if command == "/reset":
             voice.reset()

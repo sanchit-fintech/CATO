@@ -38,11 +38,15 @@ class Settings:
     voice_enabled: bool = True
     stt_provider: str = "faster-whisper"
     stt_model: str = "base"
-    stt_timeout_seconds: float = 30.0
+    stt_timeout_seconds: float = 120.0
+    stt_device: str = "cpu"
+    stt_compute_type: str = "auto"
     tts_provider: str = "macos-say"
     microphone_device: str | None = None
-    recording_timeout_seconds: float = 15.0
-    silence_timeout_seconds: float = 1.5
+    recording_timeout_seconds: float = 12.0
+    silence_timeout_seconds: float = 1.2
+    silence_threshold: float = 500.0
+    audio_block_size: int = 1024
     tts_voice: str | None = None
     tts_rate: int | None = None
     max_spoken_characters: int = 500
@@ -102,15 +106,19 @@ class Settings:
             voice_enabled=_boolean("CATO_VOICE_ENABLED", True),
             stt_provider=os.getenv("CATO_STT_PROVIDER", "faster-whisper"),
             stt_model=os.getenv("CATO_STT_MODEL", "base"),
-            stt_timeout_seconds=_float("CATO_STT_TIMEOUT_SECONDS", 30, minimum=0.1),
+            stt_timeout_seconds=_float("CATO_STT_TIMEOUT_SECONDS", 120, minimum=0.1),
+            stt_device=os.getenv("CATO_STT_DEVICE", "cpu"),
+            stt_compute_type=os.getenv("CATO_STT_COMPUTE_TYPE", "auto"),
             tts_provider=os.getenv("CATO_TTS_PROVIDER", "macos-say"),
             microphone_device=os.getenv("CATO_MICROPHONE_DEVICE") or None,
             recording_timeout_seconds=_float(
-                "CATO_RECORDING_TIMEOUT_SECONDS", 15, minimum=0.1
+                "CATO_RECORDING_TIMEOUT_SECONDS", 12, minimum=0.1
             ),
             silence_timeout_seconds=_float(
-                "CATO_SILENCE_TIMEOUT_SECONDS", 1.5, minimum=0.1
+                "CATO_SILENCE_TIMEOUT_SECONDS", 1.2, minimum=0.1
             ),
+            silence_threshold=_float("CATO_SILENCE_THRESHOLD", 500, minimum=1),
+            audio_block_size=_integer("CATO_AUDIO_BLOCK_SIZE", 1024, minimum=128),
             tts_voice=os.getenv("CATO_TTS_VOICE") or None,
             tts_rate=_optional_integer("CATO_TTS_RATE", minimum=80, maximum=500),
             max_spoken_characters=_integer(

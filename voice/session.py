@@ -120,9 +120,21 @@ class VoiceSession:
 
     def health(self) -> dict[str, Any]:
         try:
-            api = self.client.health().get("status", "unknown")
+            api_health = self.client.health()
+            if api_health.get("service") == "cato":
+                api_state = (
+                    "available"
+                    if api_health.get("ready") is True
+                    else "configuration_required"
+                )
+            else:
+                api_state = "incompatible_service"
+        except APIError as error:
+            api_health = {"error": str(error), "code": error.code}
+            api_state = error.code
         except Exception:
-            api = "unavailable"
+            api_health = {"error": "Health check failed."}
+            api_state = "unavailable"
         microphone = self.capture.health()
         stt = self.stt.health()
         tts = self.tts.health()
@@ -135,13 +147,17 @@ class VoiceSession:
                     tts.get("status"),
                 )
             )
-            and api == "ok"
+            and api_state == "available"
         )
         return {
             "microphone": microphone,
             "stt": stt,
             "tts": tts,
-            "api": api,
+            "api": {
+                **api_health,
+                "status": api_state,
+                "url": getattr(self.client, "base_url", "unknown"),
+            },
             "ready": ready,
         }
 

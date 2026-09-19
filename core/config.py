@@ -26,6 +26,15 @@ class Settings:
     history_limit: int = 50
     api_host: str = "127.0.0.1"
     api_port: int = 8000
+    approval_ttl_seconds: int = 300
+    max_clipboard_bytes: int = 100_000
+    allowed_macos_apps: tuple[str, ...] = (
+        "Finder",
+        "Safari",
+        "Terminal",
+        "Visual Studio Code",
+        "Notes",
+    )
 
     @classmethod
     def load(cls, *, require_api_key: bool = True) -> Settings:
@@ -64,6 +73,20 @@ class Settings:
             history_limit=_integer("CATO_HISTORY_LIMIT", 50, minimum=4),
             api_host=os.getenv("CATO_API_HOST", "127.0.0.1"),
             api_port=_integer("CATO_API_PORT", 8000, minimum=1, maximum=65535),
+            approval_ttl_seconds=_integer(
+                "CATO_APPROVAL_TTL_SECONDS", 300, minimum=1, maximum=3600
+            ),
+            max_clipboard_bytes=_integer(
+                "CATO_MAX_CLIPBOARD_BYTES", 100_000, minimum=1
+            ),
+            allowed_macos_apps=tuple(
+                item.strip()
+                for item in os.getenv(
+                    "CATO_ALLOWED_MACOS_APPS",
+                    "Finder,Safari,Terminal,Visual Studio Code,Notes",
+                ).split(",")
+                if item.strip()
+            ),
         )
 
 

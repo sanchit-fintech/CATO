@@ -19,11 +19,20 @@ and stops with either a final answer or a clear terminal status.
   timeout/output limits, and a narrow read-only command policy.
 - Gemini provider plus a deterministic offline fake provider.
 - CLI and FastAPI (`/health`, `/chat`, and session reset).
+- Native macOS actions for allowed apps, approved paths, Finder, safe URLs,
+  bounded text clipboard access, notifications, running-app discovery, VS Code,
+  Terminal project opening, and conservative permission status.
+- Expiring, session-bound, one-time approval tokens for moderate-risk actions.
 
 Delete is intentionally unavailable until a human-confirmation flow exists.
 Command execution is intentionally limited: `pwd`, `ls`, safe read-only Git
 subcommands, and Python version inspection. Cato is a policy boundary, not an OS
 sandbox; run it as a normal user with narrow approved roots.
+
+macOS tools register only on macOS. App launching uses the configurable
+`CATO_ALLOWED_MACOS_APPS` allowlist. Clipboard writes, app quits, file moves, and
+file overwrites pause for explicit approval before execution. Cato does not grant
+or bypass Accessibility, Automation, Notification, or Full Disk Access.
 
 ## Architecture
 
@@ -34,6 +43,8 @@ sandbox; run it as a normal user with narrow approved roots.
 - `tools/`: filesystem and command policies/implementations
 - `core/llm/`: provider contract, Gemini adapter, and offline fake
 - `core/api.py`: HTTP interface
+- `core/approvals.py`: approval lifecycle and replay prevention
+- `cato_platform/macos/`: injectable native macOS integration
 
 Operational plans contain task steps only; Cato never asks for or exposes hidden
 chain-of-thought. Tool failures are observations, allowing a later action to
@@ -75,6 +86,16 @@ Chat request:
 
 The response contains `response`, `session_id`, `status`, and `iterations`.
 Pass the returned session ID on later requests to continue that session.
+Approval responses also contain `approval_id`, `summary`, `risk`, and
+`expires_at`. Resolve one with the same session:
+
+```text
+POST /approvals/{approval_id}/approve  {"session_id":"..."}
+POST /approvals/{approval_id}/deny     {"session_id":"..."}
+```
+
+An ID authorizes only its exact stored action. Arguments are not returned by the
+API and are scrubbed after use, denial, or expiry.
 
 ## Verification
 
@@ -92,3 +113,8 @@ The memory interface is deliberately in-memory for now. A future encrypted or
 carefully redacted SQLite implementation can implement `MemoryStore` without
 changing runtime orchestration. High-risk/destructive capabilities should only
 be added together with an explicit, auditable human-approval mechanism.
+
+Native control intentionally excludes mouse/keyboard automation, screen capture,
+unrestricted AppleScript, arbitrary Terminal commands, force-killing, system
+setting changes, and background monitoring. Permission reporting is conservative
+because macOS does not expose every grant through stable public APIs.

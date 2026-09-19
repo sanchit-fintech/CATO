@@ -14,6 +14,14 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
 
 
+class ApprovalRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=128)
+
+
+def _result(result: object) -> dict[str, object]:
+    return {key: value for key, value in vars(result).items() if value is not None}
+
+
 def create_app(cato: Cato | None = None) -> FastAPI:
     app = FastAPI(title="Cato", version="1.0.0")
     runtime = cato
@@ -39,12 +47,19 @@ def create_app(cato: Cato | None = None) -> FastAPI:
         nonlocal runtime
         runtime = runtime or Cato()
         result = runtime.run(request.message, session_id=request.session_id)
-        return {
-            "response": result.response,
-            "session_id": result.session_id,
-            "status": result.status,
-            "iterations": result.iterations,
-        }
+        return _result(result)
+
+    @app.post("/approvals/{approval_id}/approve")
+    def approve(approval_id: str, request: ApprovalRequest) -> dict[str, object]:
+        nonlocal runtime
+        runtime = runtime or Cato()
+        return _result(runtime.approve(approval_id, request.session_id))
+
+    @app.post("/approvals/{approval_id}/deny")
+    def deny(approval_id: str, request: ApprovalRequest) -> dict[str, object]:
+        nonlocal runtime
+        runtime = runtime or Cato()
+        return _result(runtime.deny(approval_id, request.session_id))
 
     @app.delete("/sessions/{session_id}")
     def clear_session(session_id: str) -> dict[str, object]:

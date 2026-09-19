@@ -34,26 +34,35 @@ class ToolRegistry:
                 },
                 "risk": tool.risk,
                 "capability": tool.capability,
+                "approval_required": tool.approval_required
+                or tool.approval_when is not None,
             }
             for tool in self._tools.values()
         ]
 
-    def run(self, name: str, **kwargs: Any) -> ToolResult:
+    def needs_approval(self, name: str, arguments: dict[str, Any]) -> bool:
         tool = self.get(name)
+        if tool is None:
+            return False
+        return tool.approval_required or (
+            tool.approval_when is not None and tool.approval_when(arguments)
+        )
+
+    def validate(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult | None:
+        tool = self.get(tool_name)
         if tool is None:
             return ToolResult.failure(
                 "That action is not available.", code="unknown_tool"
             )
-
-        unknown = set(kwargs) - set(tool.arguments)
+        unknown = set(arguments) - set(tool.arguments)
         missing = {
             key
             for key, specification in tool.arguments.items()
-            if specification.required and key not in kwargs
+            if specification.required and key not in arguments
         }
         invalid = {
             key
-            for key, value in kwargs.items()
+            for key, value in arguments.items()
             if key in tool.arguments
             and value is not None
             and (
@@ -65,8 +74,16 @@ class ToolRegistry:
             return ToolResult.failure(
                 "The action arguments were invalid.", code="invalid_arguments"
             )
+        return None
 
-        logger.info("tool_execute", extra={"tool_name": name})
+    def run(self, tool_name: str, **kwargs: Any) -> ToolResult:
+        invalid = self.validate(tool_name, kwargs)
+        if invalid is not None:
+            return invalid
+        tool = self.get(tool_name)
+        assert tool is not None
+
+        logger.info("tool_execute", extra={"tool_name": tool_name})
         try:
             result = tool.function(**kwargs)
             return (
@@ -75,6 +92,6 @@ class ToolRegistry:
         except Exception as error:
             logger.error(
                 "tool_failed",
-                extra={"tool_name": name, "error_type": type(error).__name__},
+                extra={"tool_name": tool_name, "error_type": type(error).__name__},
             )
             return ToolResult.failure("The action could not be completed.")

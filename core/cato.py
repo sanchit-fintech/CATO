@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import logging
+import platform
 from functools import partial
 
+from cato_platform.macos import MacOSController
+from core.agent_protocol import Observation
+from core.approvals import ApprovalStore
 from core.config import ConfigurationError, Settings
 from core.llm.base import ModelProvider
 from core.llm.gemini import GeminiModelProvider
@@ -34,6 +38,8 @@ class Cato:
         provider: ModelProvider | None = None,
         settings: Settings | None = None,
         memory: MemoryStore | None = None,
+        macos: MacOSController | None = None,
+        platform_system: str | None = None,
     ) -> None:
         self.name = "Cato"
         self.settings = settings or Settings.load(require_api_key=provider is None)
@@ -43,11 +49,23 @@ class Cato:
                 self.settings.gemini_api_key, self.settings.gemini_model
             )
         self.provider = provider
+        self.approvals = ApprovalStore(ttl_seconds=self.settings.approval_ttl_seconds)
+        self.platform_system = platform_system or platform.system()
+        self.macos = macos
+        if self.macos is None and self.platform_system == "Darwin":
+            self.macos = MacOSController(
+                self.settings.approved_roots,
+                frozenset(self.settings.allowed_macos_apps),
+                self.settings.max_clipboard_bytes,
+            )
         self.tools = ToolRegistry()
         self._register_tools()
         self.memory = memory or InMemoryStore(history_limit=self.settings.history_limit)
         self.runtime = AgentRuntime(
-            self.provider, self.tools, max_iterations=self.settings.max_agent_iterations
+            self.provider,
+            self.tools,
+            max_iterations=self.settings.max_agent_iterations,
+            approvals=self.approvals,
         )
 
     def _register_tools(self) -> None:
@@ -112,6 +130,7 @@ class Cato:
                 False,
                 "medium",
                 "write",
+                approval_when=lambda arguments: bool(arguments.get("overwrite")),
             ),
             ToolDefinition(
                 "file_create_directory",
@@ -147,6 +166,7 @@ class Cato:
                 False,
                 "medium",
                 "write",
+                approval_required=True,
             ),
             ToolDefinition(
                 "command_run",
@@ -169,6 +189,142 @@ class Cato:
         ]
         for tool in registrations:
             self.tools.register(tool)
+        if self.macos is not None:
+            self._register_macos_tools(self.macos)
+
+    def _register_macos_tools(self, macos: MacOSController) -> None:
+        registrations = [
+            ToolDefinition(
+                "mac_open_app",
+                "Open an allowed macOS application.",
+                macos.open_app,
+                {"name": ToolArgument(str)},
+                True,
+                "low",
+                "system",
+            ),
+            ToolDefinition(
+                "mac_activate_app",
+                "Bring an allowed application to the foreground.",
+                macos.activate_app,
+                {"name": ToolArgument(str)},
+                True,
+                "low",
+                "system",
+            ),
+            ToolDefinition(
+                "mac_quit_app",
+                "Gracefully quit an allowed non-protected application.",
+                macos.quit_app,
+                {"name": ToolArgument(str)},
+                False,
+                "moderate",
+                "system",
+                True,
+            ),
+            ToolDefinition(
+                "mac_open_file",
+                "Open an approved non-sensitive file.",
+                partial(macos.open_path, directory=False),
+                {"path": ToolArgument(str)},
+                True,
+                "low",
+                "system",
+            ),
+            ToolDefinition(
+                "mac_open_folder",
+                "Open an approved folder.",
+                partial(macos.open_path, directory=True),
+                {"path": ToolArgument(str)},
+                True,
+                "low",
+                "system",
+            ),
+            ToolDefinition(
+                "mac_reveal_in_finder",
+                "Reveal an approved path in Finder.",
+                partial(macos.open_path, reveal=True),
+                {"path": ToolArgument(str)},
+                True,
+                "low",
+                "system",
+            ),
+            ToolDefinition(
+                "mac_open_url",
+                "Open an HTTP or HTTPS URL.",
+                macos.open_url,
+                {"url": ToolArgument(str)},
+                True,
+                "low",
+                "network",
+            ),
+            ToolDefinition(
+                "mac_clipboard_read",
+                "Read bounded text from the clipboard.",
+                macos.clipboard_read,
+                {},
+                True,
+                "low",
+                "sensitive",
+            ),
+            ToolDefinition(
+                "mac_clipboard_write",
+                "Replace clipboard text.",
+                macos.clipboard_write,
+                {"text": ToolArgument(str)},
+                False,
+                "moderate",
+                "write",
+                True,
+            ),
+            ToolDefinition(
+                "mac_show_notification",
+                "Show a bounded macOS notification.",
+                macos.show_notification,
+                {"title": ToolArgument(str), "message": ToolArgument(str)},
+                True,
+                "low",
+                "system",
+            ),
+            ToolDefinition(
+                "mac_list_running_apps",
+                "List running foreground GUI applications.",
+                macos.list_running_apps,
+                {},
+                True,
+                "low",
+                "read_only",
+            ),
+            ToolDefinition(
+                "mac_open_in_vscode",
+                "Open an approved path in Visual Studio Code.",
+                macos.open_in_vscode,
+                {"path": ToolArgument(str)},
+                True,
+                "low",
+                "system",
+            ),
+            ToolDefinition(
+                "mac_open_in_terminal",
+                "Open an approved folder in Terminal without typing commands.",
+                macos.open_in_terminal,
+                {"path": ToolArgument(str)},
+                True,
+                "low",
+                "system",
+            ),
+            ToolDefinition(
+                "mac_permission_status",
+                "Report conservative macOS permission availability.",
+                macos.permission_status,
+                {},
+                True,
+                "low",
+                "read_only",
+            ),
+        ]
+        for tool in registrations:
+            self.tools.register(tool)
 
     def run(self, command: str, *, session_id: str | None = None) -> RunResult:
         command = command.strip()
@@ -186,6 +342,53 @@ class Cato:
 
     def respond(self, command: str, *, session_id: str | None = None) -> str:
         return self.run(command, session_id=session_id).response
+
+    def approve(self, approval_id: str, session_id: str) -> RunResult:
+        session = self.memory.get(session_id)
+        if session is None:
+            return RunResult("Session not found.", "invalid_session", session_id, 0)
+        decision = self.approvals.approve(approval_id, session_id)
+        if not decision.ok or decision.approval is None:
+            return RunResult(
+                "Approval could not be used.", decision.code, session_id, 0
+            )
+        pending = decision.approval
+        arguments = dict(pending.arguments)
+        request = pending.request
+        result = self.tools.run(pending.tool, **arguments)
+        pending.redact()
+        observation = Observation(
+            pending.tool,
+            result.ok,
+            result.summary or result.error or "Action completed.",
+            result.data if result.ok else None,
+            result.code,
+            False,
+            result.truncated,
+            result.metadata or {},
+        )
+        completed = self.runtime.resume(request, session, observation)
+        self.memory.save(session)
+        return completed
+
+    def deny(self, approval_id: str, session_id: str) -> RunResult:
+        session = self.memory.get(session_id)
+        if session is None:
+            return RunResult("Session not found.", "invalid_session", session_id, 0)
+        decision = self.approvals.deny(approval_id, session_id)
+        if not decision.ok:
+            return RunResult(
+                "Approval could not be denied.", decision.code, session_id, 0
+            )
+        session.status = "denied"
+        session.add("assistant", "The pending action was denied and was not executed.")
+        self.memory.save(session)
+        return RunResult(
+            "The pending action was denied and was not executed.",
+            "denied",
+            session_id,
+            0,
+        )
 
 
 def configure_logging(level: str) -> None:
@@ -205,7 +408,7 @@ def main() -> None:
         print(f"Cato could not start: {error}")
         return
 
-    print("Cato v0.7")
+    print("Cato v0.8")
     print("Type 'exit' to shut down.\n")
     while True:
         try:

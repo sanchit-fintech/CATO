@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cato-agent"
-version = "0.7.0"
+version = "0.8.0"
 description = "A local-first CLI personal-agent prototype"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -25,7 +25,7 @@ dev = [
 cato = "core.cato:main"
 
 [tool.setuptools.packages.find]
-include = ["core*", "tools*", "memory*"]
+include = ["core*", "tools*", "memory*", "cato_platform*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

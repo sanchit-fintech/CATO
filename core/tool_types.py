@@ -24,6 +24,8 @@ class ToolDefinition:
     capability: Literal[
         "read_only", "write", "destructive", "system", "network", "sensitive"
     ] = "read_only"
+    approval_required: bool = False
+    approval_when: Callable[[dict[str, Any]], bool] | None = None
 
 
 @dataclass

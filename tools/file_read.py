@@ -13,6 +13,7 @@ def read_file(
     *,
     approved_roots: tuple[Path, ...],
     max_chars: int = 12_000,
+    max_bytes: int = 1_000_000,
 ) -> ToolResult:
     """
     Read a text file from the user's Mac.
@@ -38,14 +39,37 @@ def read_file(
         )
 
     try:
-        content = file_path.read_text(errors="replace")
+        size = file_path.stat().st_size
+        if size > max_bytes:
+            return ToolResult.failure(
+                "The file is too large to read safely.", code="file_too_large"
+            )
+        sample = file_path.read_bytes()[:8192]
+        if b"\x00" in sample:
+            return ToolResult.failure(
+                "Binary files cannot be read as text.", code="binary_file"
+            )
+    except OSError:
+        return ToolResult.failure("The file could not be read.", code="read_error")
+
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return ToolResult.failure(
+            "Binary or non-UTF-8 files cannot be read as text.", code="binary_file"
+        )
     except PermissionError:
         return ToolResult.failure("Permission denied.", code="permission_denied")
     except OSError:
         return ToolResult.failure("The file could not be read.", code="read_error")
 
-    if len(content) > max_chars:
+    truncated = len(content) > max_chars
+    if truncated:
         content = content[:max_chars]
         content += "\n\n[Output truncated.]"
 
-    return ToolResult.success({"path": str(file_path), "content": content})
+    return ToolResult.success(
+        {"path": str(file_path), "content": content},
+        summary="File read.",
+        truncated=truncated,
+    )

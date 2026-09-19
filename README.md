@@ -1,97 +1,94 @@
 # Cato
 
-Cato is currently a local-first, command-line personal-agent prototype for macOS.
-It uses a model provider to understand a request, selects a registered tool, runs
-that tool inside a configured safety boundary, and summarizes the result.
+Cato is a local-first Python agent runtime for safely completing bounded,
+multi-step tasks. It asks a model for one structured action at a time, validates
+and executes registered tools, feeds structured observations back to the model,
+and stops with either a final answer or a clear terminal status.
 
-## Current capabilities
+## Capabilities
 
-- Search for files and directories by name inside approved roots.
-- Read non-sensitive text files inside approved roots.
-- Use Gemini for request classification and response generation.
-- Use a fake model provider for deterministic, offline tests.
-- Reject traversal, symlink escapes, invalid tool calls, and obvious sensitive files.
+- Iterative agent loop with typed tool/final actions, plans, recovery, and a
+  configurable hard iteration limit.
+- Session IDs, bounded conversation history, and a testable in-memory
+  `MemoryStore` abstraction. Tool payloads are not persisted in session history.
+- Approved-root filesystem search, listing, metadata, text reads, writes,
+  directory creation, copy, and move.
+- Traversal and symlink-escape prevention, sensitive-name filtering, binary and
+  oversized-file refusal, bounded results, and explicit overwrite semantics.
+- Structured command execution with no shell, approved working directories,
+  timeout/output limits, and a narrow read-only command policy.
+- Gemini provider plus a deterministic offline fake provider.
+- CLI and FastAPI (`/health`, `/chat`, and session reset).
 
-Cato cannot yet modify files, control applications, run shell commands, retain
-memory, accept voice input, execute multi-step plans, or communicate with mobile
-devices.
+Delete is intentionally unavailable until a human-confirmation flow exists.
+Command execution is intentionally limited: `pwd`, `ls`, safe read-only Git
+subcommands, and Python version inspection. Cato is a policy boundary, not an OS
+sandbox; run it as a normal user with narrow approved roots.
 
 ## Architecture
 
-`core.cato.Cato` coordinates a `ModelProvider` and the `ToolRegistry`. Gemini is
-implemented in `core/llm/gemini.py`; tests inject `FakeModelProvider`. Registered
-tools contain metadata and argument contracts and return structured `ToolResult`
-objects. Filesystem tools canonicalize every requested path against configured
-approved roots.
+- `core/runtime.py`: iterative state machine and termination behavior
+- `core/agent_protocol.py`: validated agent actions and observations
+- `core/tool_registry.py`: argument validation and safe exception conversion
+- `core/session.py`, `memory/store.py`: bounded session state and memory interface
+- `tools/`: filesystem and command policies/implementations
+- `core/llm/`: provider contract, Gemini adapter, and offline fake
+- `core/api.py`: HTTP interface
+
+Operational plans contain task steps only; Cato never asks for or exposes hidden
+chain-of-thought. Tool failures are observations, allowing a later action to
+recover. Logs contain event and tool names, not prompts, arguments, or outputs.
 
 ## Setup
 
 Cato requires Python 3.11 or newer.
 
 ```bash
-cd /path/to/Cato
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install --upgrade pip
 python -m pip install -e '.[dev]'
 cp .env.example .env
 ```
 
-Edit `.env` and set your own `GEMINI_API_KEY`. Never commit that file.
-
-## Configuration
-
-- `GEMINI_API_KEY`: required for the real Gemini provider.
-- `GEMINI_MODEL`: model name; defaults to `gemini-3.6-flash`.
-- `CATO_APPROVED_ROOTS`: approved paths separated by `:` on macOS/Linux. The
-  safe default is the directory from which Cato starts.
-- `LOG_LEVEL`: Python logging level; defaults to `INFO`.
-
-Relative approved roots are resolved at startup. Prefer narrow roots, for example:
-
-```dotenv
-CATO_APPROVED_ROOTS=/Users/you/Projects:/Users/you/Documents/CatoInbox
-```
+Set `GEMINI_API_KEY` in `.env`. Configure `CATO_APPROVED_ROOTS` as a
+platform-path-separator-delimited list of narrow roots. The safe default is the
+launch directory. Other settings and defaults are documented in `.env.example`.
 
 ## Run
-
-From the repository root with the virtual environment active:
 
 ```bash
 python -m core.cato
 ```
 
-After editable installation, `cato` is an equivalent command. Directly running
-`python core/cato.py` is not supported because Cato is a Python package.
+To embed the API, use `core.api.create_app()`. For example, after installing an
+ASGI server of your choice:
 
-## Test and lint
+```bash
+uvicorn 'core.api:create_app' --factory --host 127.0.0.1 --port 8000
+```
 
-Tests are offline and use temporary directories:
+Chat request:
+
+```json
+{"message": "List Python files in my project", "session_id": null}
+```
+
+The response contains `response`, `session_id`, `status`, and `iterations`.
+Pass the returned session ID on later requests to continue that session.
+
+## Verification
+
+The suite is offline and covers multi-tool execution, recovery, termination,
+filesystem boundaries, write safety, command policy, sessions, and the API.
 
 ```bash
 pytest
 ruff check .
 ```
 
-## Security model
+## Next production steps
 
-File tools are limited to canonical paths below `CATO_APPROVED_ROOTS`. Parent-path
-and symlink escapes are denied. Searches are bounded and hide obvious sensitive
-filenames. Reads of `.env`, private keys, credential files, and token/secret files
-return an approval-required result; their contents are not sent to the model.
-
-This is an early baseline, not a complete sandbox. Run Cato as a normal user,
-configure narrow approved roots, review those roots carefully, and do not grant
-the process unnecessary macOS permissions. The approval UI and comprehensive
-sensitive-data classification are future work.
-
-Logs record startup, selected tool names, execution, and failures. They do not log
-commands, API keys, file contents, or tool arguments.
-
-## Short roadmap
-
-1. Expand typed tool and permission policies.
-2. Add carefully approved Mac and file actions.
-3. Add voice input/output and local memory.
-4. Add bounded multi-step task execution and coding assistance.
-5. Add authenticated integrations and Apple-device communication.
+The memory interface is deliberately in-memory for now. A future encrypted or
+carefully redacted SQLite implementation can implement `MemoryStore` without
+changing runtime orchestration. High-risk/destructive capabilities should only
+be added together with an explicit, auditable human-approval mechanism.

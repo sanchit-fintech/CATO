@@ -19,6 +19,39 @@ class GeminiModelProvider:
         )
         self.model = model
 
+    def next_action(
+        self, command: str, context: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        prompt = f"""
+You are Cato, a safe local computer agent. Choose exactly one next action.
+Return a tool action with type "tool", a registered tool name, an arguments
+object, and an optional list of operational plan steps.
+or finish as {{"type":"final","response":"answer"}}. Never expose hidden reasoning.
+Tools: {json.dumps(tools, default=str)}
+User request: {command}
+Prior actions and observations: {json.dumps(context, default=str)}
+"""
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                ),
+            )
+            if not response.text:
+                raise ProviderError("The model returned an empty response.")
+            result = json.loads(response.text)
+            if not isinstance(result, dict):
+                raise ProviderError("The model returned an invalid action.")
+            return result
+        except ProviderError:
+            raise
+        except (json.JSONDecodeError, TypeError, ValueError) as error:
+            raise ProviderError("The model returned an invalid action.") from error
+        except Exception as error:
+            raise ProviderError("The model service is unavailable.") from error
+
     def understand(self, command: str) -> dict[str, Any]:
         prompt = f"""
 You are Cato, a personal computer assistant. Choose the correct tool.

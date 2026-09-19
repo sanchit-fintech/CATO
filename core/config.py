@@ -19,6 +19,13 @@ class Settings:
     gemini_model: str
     approved_roots: tuple[Path, ...]
     log_level: str
+    max_agent_iterations: int = 8
+    max_file_read_bytes: int = 1_000_000
+    max_command_output_bytes: int = 20_000
+    command_timeout: float = 10.0
+    history_limit: int = 50
+    api_host: str = "127.0.0.1"
+    api_port: int = 8000
 
     @classmethod
     def load(cls, *, require_api_key: bool = True) -> Settings:
@@ -44,4 +51,39 @@ class Settings:
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
             approved_roots=roots,
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
+            max_agent_iterations=_integer(
+                "CATO_MAX_AGENT_ITERATIONS", 8, minimum=1, maximum=50
+            ),
+            max_file_read_bytes=_integer(
+                "CATO_MAX_FILE_READ_BYTES", 1_000_000, minimum=1024
+            ),
+            max_command_output_bytes=_integer(
+                "CATO_MAX_COMMAND_OUTPUT_BYTES", 20_000, minimum=1024
+            ),
+            command_timeout=_float("CATO_COMMAND_TIMEOUT", 10, minimum=0.1),
+            history_limit=_integer("CATO_HISTORY_LIMIT", 50, minimum=4),
+            api_host=os.getenv("CATO_API_HOST", "127.0.0.1"),
+            api_port=_integer("CATO_API_PORT", 8000, minimum=1, maximum=65535),
         )
+
+
+def _integer(
+    name: str, default: int, *, minimum: int, maximum: int | None = None
+) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError as error:
+        raise ConfigurationError(f"{name} must be an integer.") from error
+    if value < minimum or maximum is not None and value > maximum:
+        raise ConfigurationError(f"{name} is outside its allowed range.")
+    return value
+
+
+def _float(name: str, default: float, *, minimum: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError as error:
+        raise ConfigurationError(f"{name} must be a number.") from error
+    if value < minimum:
+        raise ConfigurationError(f"{name} is outside its allowed range.")
+    return value

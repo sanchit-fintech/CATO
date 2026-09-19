@@ -23,6 +23,21 @@ class ToolRegistry:
     def list_tools(self) -> list[str]:
         return list(self._tools.keys())
 
+    def schemas(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "arguments": {
+                    name: {"type": spec.type.__name__, "required": spec.required}
+                    for name, spec in tool.arguments.items()
+                },
+                "risk": tool.risk,
+                "capability": tool.capability,
+            }
+            for tool in self._tools.values()
+        ]
+
     def run(self, name: str, **kwargs: Any) -> ToolResult:
         tool = self.get(name)
         if tool is None:
@@ -41,7 +56,10 @@ class ToolRegistry:
             for key, value in kwargs.items()
             if key in tool.arguments
             and value is not None
-            and not isinstance(value, tool.arguments[key].type)
+            and (
+                not isinstance(value, tool.arguments[key].type)
+                or (tool.arguments[key].type is int and isinstance(value, bool))
+            )
         }
         if unknown or missing or invalid:
             return ToolResult.failure(

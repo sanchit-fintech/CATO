@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,9 @@ class ToolDefinition:
     arguments: dict[str, ToolArgument]
     read_only: bool = True
     risk: str = "low"
+    capability: Literal[
+        "read_only", "write", "destructive", "system", "network", "sensitive"
+    ] = "read_only"
 
 
 @dataclass
@@ -30,10 +33,22 @@ class ToolResult:
     error: str | None = None
     code: str | None = None
     requires_approval: bool = False
+    summary: str | None = None
+    truncated: bool = False
+    metadata: dict[str, Any] | None = None
 
     @classmethod
-    def success(cls, data: Any) -> ToolResult:
-        return cls(ok=True, data=data)
+    def success(
+        cls,
+        data: Any,
+        *,
+        summary: str | None = None,
+        truncated: bool = False,
+        metadata: dict[str, Any] | None = None,
+    ) -> ToolResult:
+        return cls(
+            True, data=data, summary=summary, truncated=truncated, metadata=metadata
+        )
 
     @classmethod
     def failure(

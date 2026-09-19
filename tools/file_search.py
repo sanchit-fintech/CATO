@@ -1,5 +1,6 @@
 """Bounded filename search within approved filesystem roots."""
 
+from datetime import datetime
 from pathlib import Path
 
 from core.tool_types import ToolResult
@@ -17,6 +18,8 @@ def search_files(
     root: str | None = None,
     max_results: int = 50,
     max_entries: int = 50_000,
+    extension: str | None = None,
+    modified_after: str | None = None,
 ) -> ToolResult:
     query = query.lower().strip()
     if not query:
@@ -35,6 +38,17 @@ def search_files(
             "That path is outside Cato's approved roots.", code="path_not_approved"
         )
 
+    try:
+        cutoff = (
+            datetime.fromisoformat(modified_after).timestamp()
+            if modified_after
+            else None
+        )
+    except ValueError:
+        return ToolResult.failure(
+            "modified_after must be an ISO date or timestamp.", code="invalid_arguments"
+        )
+    normalized_extension = extension.lower().lstrip(".") if extension else None
     matches: list[str] = []
     scanned = 0
     skipped_sensitive = 0
@@ -44,7 +58,14 @@ def search_files(
                 scanned += 1
                 if scanned > max_entries or len(matches) >= max_results:
                     break
-                if query in path.name.lower():
+                if (
+                    query in path.name.lower()
+                    and (
+                        not normalized_extension
+                        or path.suffix.lower().lstrip(".") == normalized_extension
+                    )
+                    and (cutoff is None or path.stat().st_mtime >= cutoff)
+                ):
                     if is_sensitive_path(path):
                         skipped_sensitive += 1
                     else:

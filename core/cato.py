@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import platform
+import sys
 from functools import partial
 
 from cato_platform.macos import MacOSController
@@ -399,16 +400,37 @@ def configure_logging(level: str) -> None:
 
 
 def main() -> None:
+    mode = sys.argv[1].lower() if len(sys.argv) > 1 else "chat"
     try:
-        settings = Settings.load()
+        settings = Settings.load(require_api_key=mode in {"chat", ""})
         configure_logging(settings.log_level)
         logger.info("cato_starting")
-        cato = Cato(settings=settings)
     except ConfigurationError as error:
         print(f"Cato could not start: {error}")
         return
 
-    print("Cato v0.8")
+    if mode == "voice":
+        if not settings.voice_enabled:
+            print("Cato voice mode is disabled by configuration.")
+            return
+        from client.voice_client import run_voice_client
+
+        run_voice_client(settings)
+        return
+    if mode == "health":
+        from client.api_client import APIError, HTTPAgentClient
+
+        try:
+            print(HTTPAgentClient(settings.voice_client_api_url).health())
+        except APIError as error:
+            print(error)
+        return
+    if mode not in {"chat", ""}:
+        print("Usage: cato [chat|voice|health]")
+        return
+
+    cato = Cato(settings=settings)
+    print("Cato v0.9")
     print("Type 'exit' to shut down.\n")
     while True:
         try:

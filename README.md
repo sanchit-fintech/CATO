@@ -23,6 +23,9 @@ and stops with either a final answer or a clear terminal status.
   bounded text clipboard access, notifications, running-app discovery, VS Code,
   Terminal project opening, and conservative permission status.
 - Expiring, session-bound, one-time approval tokens for moderate-risk actions.
+- Explicit push-to-talk voice conversations with local Whisper STT, native macOS
+  speech, typed fallback, cancellation, bounded spoken output, and conversational
+  approval handling.
 
 Delete is intentionally unavailable until a human-confirmation flow exists.
 Command execution is intentionally limited: `pwd`, `ls`, safe read-only Git
@@ -33,6 +36,10 @@ macOS tools register only on macOS. App launching uses the configurable
 `CATO_ALLOWED_MACOS_APPS` allowlist. Clipboard writes, app quits, file moves, and
 file overwrites pause for explicit approval before execution. Cato does not grant
 or bypass Accessibility, Automation, Notification, or Full Disk Access.
+
+Voice mode never listens in the background. Recording starts only after the user
+presses ENTER. Audio is held in memory; local Whisper uses a temporary WAV only
+for the duration of transcription and removes it in all completion/error paths.
 
 ## Architecture
 
@@ -45,6 +52,8 @@ or bypass Accessibility, Automation, Notification, or Full Disk Access.
 - `core/api.py`: HTTP interface
 - `core/approvals.py`: approval lifecycle and replay prevention
 - `cato_platform/macos/`: injectable native macOS integration
+- `voice/`: audio capture, STT/TTS providers, and voice conversation state
+- `client/`: local HTTP and push-to-talk clients
 
 Operational plans contain task steps only; Cato never asks for or exposes hidden
 chain-of-thought. Tool failures are observations, allowing a later action to
@@ -61,6 +70,16 @@ python -m pip install -e '.[dev]'
 cp .env.example .env
 ```
 
+Voice mode has optional local dependencies:
+
+```bash
+python -m pip install -e '.[voice]'
+```
+
+This installs `sounddevice`, NumPy, Faster Whisper, and Uvicorn. Faster Whisper
+downloads the configured model on first use. Core chat/API imports continue to
+work when these packages are absent.
+
 Set `GEMINI_API_KEY` in `.env`. Configure `CATO_APPROVED_ROOTS` as a
 platform-path-separator-delimited list of narrow roots. The safe default is the
 launch directory. Other settings and defaults are documented in `.env.example`.
@@ -70,6 +89,19 @@ launch directory. Other settings and defaults are documented in `.env.example`.
 ```bash
 python -m core.cato
 ```
+
+Start the API and voice client in separate terminals:
+
+```bash
+uvicorn 'core.api:create_app' --factory --host 127.0.0.1 --port 8000
+cato voice
+```
+
+Voice commands are explicit: ENTER records one utterance, `/type TEXT` provides
+typed fallback, `/reset` starts a new conversation, `/health` reports microphone,
+STT, TTS, and API capability, `/cancel` interrupts owned audio activity, and
+`/quit` exits. `cato chat` starts the original direct CLI and `cato health` checks
+the configured API.
 
 To embed the API, use `core.api.create_app()`. For example, after installing an
 ASGI server of your choice:
@@ -97,6 +129,11 @@ POST /approvals/{approval_id}/deny     {"session_id":"..."}
 An ID authorizes only its exact stored action. Arguments are not returned by the
 API and are scrubbed after use, denial, or expiry.
 
+The voice client retains the latest session ID across turns. If the server loses
+that session, the client retries the request as a new session. An approval prompt
+stores exactly one current approval ID. Typed or transcribed explicit yes/no may
+resolve that ID; generic assent when no approval is pending performs no action.
+
 ## Verification
 
 The suite is offline and covers multi-tool execution, recovery, termination,
@@ -118,3 +155,9 @@ Native control intentionally excludes mouse/keyboard automation, screen capture,
 unrestricted AppleScript, arbitrary Terminal commands, force-killing, system
 setting changes, and background monitoring. Permission reporting is conservative
 because macOS does not expose every grant through stable public APIs.
+
+For microphone failures, grant access to the terminal application under macOS
+System Settings → Privacy & Security → Microphone. `/health` reports permission
+as unknown when macOS cannot be queried reliably. Missing optional packages,
+audio devices, local API failures, empty speech, STT failures, and unavailable
+TTS are surfaced without terminating the interactive client.

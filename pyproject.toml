@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cato-agent"
-version = "0.8.0"
+version = "0.9.0"
 description = "A local-first CLI personal-agent prototype"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,12 +20,18 @@ dev = [
     "pytest>=8,<10",
     "ruff>=0.11,<1",
 ]
+voice = [
+    "faster-whisper>=1.1,<2",
+    "numpy>=2,<3",
+    "sounddevice>=0.5,<1",
+    "uvicorn>=0.34,<1",
+]
 
 [project.scripts]
 cato = "core.cato:main"
 
 [tool.setuptools.packages.find]
-include = ["core*", "tools*", "memory*", "cato_platform*"]
+include = ["core*", "tools*", "memory*", "cato_platform*", "voice*", "client*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

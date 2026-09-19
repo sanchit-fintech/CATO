@@ -35,6 +35,18 @@ class Settings:
         "Visual Studio Code",
         "Notes",
     )
+    voice_enabled: bool = True
+    stt_provider: str = "faster-whisper"
+    stt_model: str = "base"
+    stt_timeout_seconds: float = 30.0
+    tts_provider: str = "macos-say"
+    microphone_device: str | None = None
+    recording_timeout_seconds: float = 15.0
+    silence_timeout_seconds: float = 1.5
+    tts_voice: str | None = None
+    tts_rate: int | None = None
+    max_spoken_characters: int = 500
+    voice_client_api_url: str = "http://127.0.0.1:8000"
 
     @classmethod
     def load(cls, *, require_api_key: bool = True) -> Settings:
@@ -87,6 +99,26 @@ class Settings:
                 ).split(",")
                 if item.strip()
             ),
+            voice_enabled=_boolean("CATO_VOICE_ENABLED", True),
+            stt_provider=os.getenv("CATO_STT_PROVIDER", "faster-whisper"),
+            stt_model=os.getenv("CATO_STT_MODEL", "base"),
+            stt_timeout_seconds=_float("CATO_STT_TIMEOUT_SECONDS", 30, minimum=0.1),
+            tts_provider=os.getenv("CATO_TTS_PROVIDER", "macos-say"),
+            microphone_device=os.getenv("CATO_MICROPHONE_DEVICE") or None,
+            recording_timeout_seconds=_float(
+                "CATO_RECORDING_TIMEOUT_SECONDS", 15, minimum=0.1
+            ),
+            silence_timeout_seconds=_float(
+                "CATO_SILENCE_TIMEOUT_SECONDS", 1.5, minimum=0.1
+            ),
+            tts_voice=os.getenv("CATO_TTS_VOICE") or None,
+            tts_rate=_optional_integer("CATO_TTS_RATE", minimum=80, maximum=500),
+            max_spoken_characters=_integer(
+                "CATO_MAX_SPOKEN_CHARACTERS", 500, minimum=80
+            ),
+            voice_client_api_url=os.getenv(
+                "CATO_VOICE_CLIENT_API_URL", "http://127.0.0.1:8000"
+            ),
         )
 
 
@@ -110,3 +142,30 @@ def _float(name: str, default: float, *, minimum: float) -> float:
     if value < minimum:
         raise ConfigurationError(f"{name} is outside its allowed range.")
     return value
+
+
+def _boolean(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigurationError(f"{name} must be true or false.")
+
+
+def _optional_integer(
+    name: str, *, minimum: int, maximum: int | None = None
+) -> int | None:
+    value = os.getenv(name)
+    if not value:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise ConfigurationError(f"{name} must be an integer.") from error
+    if parsed < minimum or maximum is not None and parsed > maximum:
+        raise ConfigurationError(f"{name} is outside its allowed range.")
+    return parsed

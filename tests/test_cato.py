@@ -91,6 +91,6 @@ def test_missing_gemini_configuration(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "")
     with pytest.raises(ConfigurationError, match="GEMINI_API_KEY"):
         Settings.load()

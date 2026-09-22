@@ -51,6 +51,13 @@ class Settings:
     tts_rate: int | None = None
     max_spoken_characters: int = 500
     voice_client_api_url: str = "http://127.0.0.1:8000"
+    max_agent_runtime_seconds: float = 120.0
+    repeated_action_limit: int = 3
+    memory_path: Path | None = None
+    task_database_path: Path | None = None
+    approval_database_path: Path | None = None
+    api_token: str | None = None
+    task_retention_days: int = 90
 
     @classmethod
     def load(cls, *, require_api_key: bool = True) -> Settings:
@@ -71,6 +78,13 @@ class Settings:
         if not roots:
             raise ConfigurationError("CATO_APPROVED_ROOTS must contain a path.")
 
+        api_host = os.getenv("CATO_API_HOST", "127.0.0.1")
+        api_token = os.getenv("CATO_API_TOKEN") or None
+        if api_host not in {"127.0.0.1", "localhost", "::1"} and not api_token:
+            raise ConfigurationError(
+                "CATO_API_TOKEN is required when CATO_API_HOST is not loopback."
+            )
+
         return cls(
             gemini_api_key=api_key,
             gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
@@ -78,6 +92,12 @@ class Settings:
             log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
             max_agent_iterations=_integer(
                 "CATO_MAX_AGENT_ITERATIONS", 8, minimum=1, maximum=50
+            ),
+            max_agent_runtime_seconds=_float(
+                "CATO_MAX_AGENT_RUNTIME_SECONDS", 120, minimum=1
+            ),
+            repeated_action_limit=_integer(
+                "CATO_REPEATED_ACTION_LIMIT", 3, minimum=2, maximum=10
             ),
             max_file_read_bytes=_integer(
                 "CATO_MAX_FILE_READ_BYTES", 1_000_000, minimum=1024
@@ -87,7 +107,7 @@ class Settings:
             ),
             command_timeout=_float("CATO_COMMAND_TIMEOUT", 10, minimum=0.1),
             history_limit=_integer("CATO_HISTORY_LIMIT", 50, minimum=4),
-            api_host=os.getenv("CATO_API_HOST", "127.0.0.1"),
+            api_host=api_host,
             api_port=_integer("CATO_API_PORT", 8000, minimum=1, maximum=65535),
             approval_ttl_seconds=_integer(
                 "CATO_APPROVAL_TTL_SECONDS", 300, minimum=1, maximum=3600
@@ -126,6 +146,23 @@ class Settings:
             ),
             voice_client_api_url=os.getenv(
                 "CATO_VOICE_CLIENT_API_URL", "http://127.0.0.1:8000"
+            ),
+            memory_path=Path(os.getenv("CATO_MEMORY_PATH", ".cato/cato-memory.sqlite3"))
+            .expanduser()
+            .resolve(),
+            task_database_path=Path(
+                os.getenv("CATO_TASK_DATABASE_PATH", ".cato/cato-tasks.sqlite3")
+            )
+            .expanduser()
+            .resolve(),
+            approval_database_path=Path(
+                os.getenv("CATO_APPROVAL_DATABASE_PATH", ".cato/cato-approvals.sqlite3")
+            )
+            .expanduser()
+            .resolve(),
+            api_token=api_token,
+            task_retention_days=_integer(
+                "CATO_TASK_RETENTION_DAYS", 90, minimum=1, maximum=3650
             ),
         )
 

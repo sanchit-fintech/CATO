@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from core.agent_protocol import AgentAction, Observation, ProtocolError
 from core.approvals import ApprovalStore
 from core.llm.base import ProviderError
 from core.session import Session
+from core.tasks import AgentTask, TaskStatus, TaskStore
 from core.tool_registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -25,6 +29,9 @@ class RunResult:
     summary: str | None = None
     risk: str | None = None
     expires_at: str | None = None
+    task_id: str | None = None
+    request_id: str | None = None
+    duration_ms: float | None = None
 
 
 class AgentRuntime:
@@ -35,17 +42,31 @@ class AgentRuntime:
         *,
         max_iterations: int = 8,
         approvals: ApprovalStore | None = None,
+        tasks: TaskStore | None = None,
+        max_runtime_seconds: float = 120,
+        repeated_action_limit: int = 3,
     ) -> None:
         self.provider, self.tools = provider, tools
         self.max_iterations = max_iterations
         self.approvals = approvals or ApprovalStore()
+        self.tasks = tasks or TaskStore()
+        self.max_runtime_seconds = max(1, max_runtime_seconds)
+        self.repeated_action_limit = max(2, repeated_action_limit)
 
-    def run(self, request: str, session: Session) -> RunResult:
+    def run(
+        self, request: str, session: Session, *, task: AgentTask | None = None
+    ) -> RunResult:
         session.status = "running"
         session.iteration_count = 0
         session.add("user", request)
+        task = task or self.tasks.create(session.id, request)
+        task.status = TaskStatus.RUNNING
+        task.started_at = task.started_at or datetime.now(UTC)
+        task.add_step(kind="request", status="completed", summary="Request accepted.")
+        self.tasks.save(task)
+        self.tasks.append_event(task.id, "request_accepted", {})
         context = [{"role": m.role, "content": m.content} for m in session.messages]
-        return self._loop(request, session, context)
+        return self._loop(request, session, context, task)
 
     def resume(
         self, request: str, session: Session, observation: Observation
@@ -54,13 +75,48 @@ class AgentRuntime:
         context = [{"role": m.role, "content": m.content} for m in session.messages]
         context.append({"role": "observation", "content": observation.to_dict()})
         self._persist_observation(session, observation)
-        return self._loop(request, session, context)
+        waiting = next(
+            (
+                task
+                for task in self.tasks.list(session_id=session.id)
+                if task.status == TaskStatus.WAITING_FOR_APPROVAL
+            ),
+            None,
+        )
+        task = waiting or self.tasks.create(session.id, request)
+        task.status = TaskStatus.RUNNING
+        task.add_step(kind="approval", status="completed", summary=observation.summary)
+        self.tasks.save(task)
+        self.tasks.append_event(task.id, "approval_granted", {})
+        return self._loop(request, session, context, task)
 
     def _loop(
-        self, request: str, session: Session, context: list[dict[str, Any]]
+        self,
+        request: str,
+        session: Session,
+        context: list[dict[str, Any]],
+        task: AgentTask,
     ) -> RunResult:
         last_error = "I couldn't complete that request."
+        started = time.monotonic()
+        fingerprints: dict[str, int] = {}
         for iteration in range(1, self.max_iterations + 1):
+            persisted = self.tasks.get(task.id)
+            if task.cancelled or (persisted is not None and persisted.cancelled):
+                task.cancelled = True
+                return self._finish(
+                    task, session, "Task cancelled.", "cancelled", iteration, started
+                )
+            if time.monotonic() - started >= self.max_runtime_seconds:
+                task.errors.append("max_runtime_exceeded")
+                return self._finish(
+                    task,
+                    session,
+                    "I stopped because the task runtime limit was reached.",
+                    "timeout",
+                    iteration,
+                    started,
+                )
             session.iteration_count = iteration
             try:
                 raw = self._next_action(request, context)
@@ -79,31 +135,63 @@ class AgentRuntime:
             except ProviderError:
                 logger.error("provider_action_failed")
                 session.status = "failed"
-                return RunResult(
+                task.errors.append("provider_unavailable")
+                return self._finish(
+                    task,
+                    session,
                     "I couldn't reach the language model. Please try again.",
                     "failed",
-                    session.id,
                     iteration,
+                    started,
                 )
             except Exception:
                 logger.exception("provider_action_unexpected")
                 session.status = "failed"
-                return RunResult(
+                task.errors.append("provider_error")
+                return self._finish(
+                    task,
+                    session,
                     "I couldn't understand that request.",
                     "failed",
-                    session.id,
                     iteration,
+                    started,
                 )
             if action.type == "final":
                 response = (action.response or "").strip()
                 if not response:
                     response = "I understand, but I don't have an action for that yet."
-                session.status = "completed"
-                session.add("assistant", response)
-                return RunResult(response, "completed", session.id, iteration)
+                return self._finish(
+                    task, session, response, "completed", iteration, started
+                )
             session.plan = action.plan or session.plan
             assert action.tool is not None
+            fingerprint = json.dumps(
+                [action.tool, action.arguments], sort_keys=True, default=str
+            )
+            fingerprints[fingerprint] = fingerprints.get(fingerprint, 0) + 1
+            if fingerprints[fingerprint] >= self.repeated_action_limit:
+                task.errors.append("repeated_action")
+                task.add_step(
+                    kind="guard",
+                    status="blocked",
+                    summary="Repeated equivalent action detected.",
+                    tool=action.tool,
+                    error_code="repeated_action",
+                )
+                self.tasks.save(task)
+                self.tasks.append_event(
+                    task.id, "task_stalled", {"error_code": "repeated_action"}
+                )
+                return self._finish(
+                    task,
+                    session,
+                    "I stopped because the same action was repeating without progress.",
+                    "stalled",
+                    iteration,
+                    started,
+                )
             definition = self.tools.get(action.tool)
+            tool_started = time.monotonic()
             invalid = self.tools.validate(action.tool, action.arguments)
             if invalid is not None:
                 result = invalid
@@ -111,6 +199,7 @@ class AgentRuntime:
                 action.tool, action.arguments
             ):
                 approval = self.approvals.create(
+                    task_id=task.id,
                     session_id=session.id,
                     tool=action.tool,
                     arguments=action.arguments,
@@ -119,6 +208,17 @@ class AgentRuntime:
                     risk=definition.risk,
                 )
                 session.status = "approval_required"
+                task.status = TaskStatus.WAITING_FOR_APPROVAL
+                task.add_step(
+                    kind="approval",
+                    status="waiting",
+                    summary=approval.summary,
+                    tool=action.tool,
+                )
+                self.tasks.save(task)
+                self.tasks.append_event(
+                    task.id, "approval_required", {"tool": action.tool}
+                )
                 return RunResult(
                     "Your approval is required before I perform this action.",
                     "approval_required",
@@ -128,6 +228,9 @@ class AgentRuntime:
                     approval.summary,
                     approval.risk,
                     approval.expires_at.isoformat(),
+                    task.id,
+                    task.request_id,
+                    (time.monotonic() - started) * 1000,
                 )
             else:
                 result = self.tools.run(action.tool, **action.arguments)
@@ -154,13 +257,77 @@ class AgentRuntime:
             context.append(item)
             self._persist_observation(session, observation)
             last_error = summary
-        session.status = "max_iterations"
+            task.add_step(
+                kind="tool",
+                status="completed" if result.ok else "failed",
+                summary=summary,
+                tool=action.tool,
+                error_code=result.code,
+                duration_ms=(time.monotonic() - tool_started) * 1000,
+            )
+            self.tasks.save(task)
+            self.tasks.append_event(
+                task.id,
+                "tool_completed" if result.ok else "tool_failed",
+                {"tool": action.tool, "error_code": result.code},
+            )
         response = (
             f"I stopped after {self.max_iterations} steps to avoid an infinite loop. "
             f"Last result: {last_error}"
         )
+        task.errors.append("max_iterations")
+        return self._finish(
+            task,
+            session,
+            response,
+            "max_iterations",
+            self.max_iterations,
+            started,
+        )
+
+    def _finish(
+        self,
+        task: AgentTask,
+        session: Session,
+        response: str,
+        status: str,
+        iterations: int,
+        started: float,
+    ) -> RunResult:
+        session.status = status
         session.add("assistant", response)
-        return RunResult(response, "max_iterations", session.id, self.max_iterations)
+        task.summary = response
+        task.status = (
+            TaskStatus.COMPLETED
+            if status == "completed"
+            else TaskStatus.CANCELLED
+            if status == "cancelled"
+            else TaskStatus.BLOCKED
+            if status in {"stalled", "timeout", "max_iterations"}
+            else TaskStatus.FAILED
+        )
+        task.updated_at = datetime.now(UTC)
+        task.completed_at = task.updated_at
+        self.tasks.save(task)
+        self.tasks.append_event(
+            task.id,
+            "task_completed"
+            if task.status == TaskStatus.COMPLETED
+            else "task_cancelled"
+            if task.status == TaskStatus.CANCELLED
+            else "task_failed",
+            {"status": status},
+        )
+        duration = (time.monotonic() - started) * 1000
+        return RunResult(
+            response,
+            status,
+            session.id,
+            iterations,
+            task_id=task.id,
+            request_id=task.request_id,
+            duration_ms=duration,
+        )
 
     @staticmethod
     def _persist_observation(session: Session, observation: Observation) -> None:

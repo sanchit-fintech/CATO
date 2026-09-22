@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cato-agent"
-version = "0.9.1"
+version = "0.14.0"
 description = "A local-first CLI personal-agent prototype"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -299,7 +299,7 @@ def test_unconfigured_api_reports_ready_false_and_chat_503(
     from fastapi.testclient import TestClient
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "")
     client = TestClient(create_app())
     health = client.get("/health").json()
     assert health["service"] == "cato" and health["ready"] is False

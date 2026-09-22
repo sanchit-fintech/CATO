@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
+import shutil
 import sys
+from dataclasses import asdict
 from functools import partial
 
 from cato_platform.macos import MacOSController
@@ -14,10 +17,14 @@ from core.config import ConfigurationError, Settings
 from core.llm.base import ModelProvider
 from core.llm.gemini import GeminiModelProvider
 from core.runtime import AgentRuntime, RunResult
+from core.session import Session
+from core.tasks import AgentTask, TaskStatus, TaskStore
 from core.tool_registry import ToolRegistry
-from core.tool_types import ToolArgument, ToolDefinition
+from core.tool_types import ToolArgument, ToolDefinition, ToolResult
+from memory.persistent import MemoryRefused, SQLiteMemory
 from memory.store import InMemoryStore, MemoryStore
 from tools.command import run_command
+from tools.developer import run_project_lint, run_project_tests
 from tools.file_read import read_file
 from tools.file_search import search_files
 from tools.filesystem import (
@@ -28,8 +35,12 @@ from tools.filesystem import (
     stat_file,
     write_file,
 )
+from tools.patch import apply_text_patch
+from tools.project import discover_projects, git_inspect, inspect_project
+from tools.transaction import apply_patch_set, rollback_patch_set
 
 logger = logging.getLogger(__name__)
+VERSION = "0.14.0"
 
 
 class Cato:
@@ -41,6 +52,7 @@ class Cato:
         memory: MemoryStore | None = None,
         macos: MacOSController | None = None,
         platform_system: str | None = None,
+        recover_tasks: bool = True,
     ) -> None:
         self.name = "Cato"
         self.settings = settings or Settings.load(require_api_key=provider is None)
@@ -50,7 +62,13 @@ class Cato:
                 self.settings.gemini_api_key, self.settings.gemini_model
             )
         self.provider = provider
-        self.approvals = ApprovalStore(ttl_seconds=self.settings.approval_ttl_seconds)
+        self.approvals = ApprovalStore(
+            ttl_seconds=self.settings.approval_ttl_seconds,
+            path=self.settings.approval_database_path,
+        )
+        self.tasks = TaskStore(
+            path=self.settings.task_database_path, recover_on_start=recover_tasks
+        )
         self.platform_system = platform_system or platform.system()
         self.macos = macos
         if self.macos is None and self.platform_system == "Darwin":
@@ -60,6 +78,11 @@ class Cato:
                 self.settings.max_clipboard_bytes,
             )
         self.tools = ToolRegistry()
+        self.long_term_memory = (
+            SQLiteMemory(self.settings.memory_path)
+            if self.settings.memory_path is not None
+            else None
+        )
         self._register_tools()
         self.memory = memory or InMemoryStore(history_limit=self.settings.history_limit)
         self.runtime = AgentRuntime(
@@ -67,6 +90,9 @@ class Cato:
             self.tools,
             max_iterations=self.settings.max_agent_iterations,
             approvals=self.approvals,
+            tasks=self.tasks,
+            max_runtime_seconds=self.settings.max_agent_runtime_seconds,
+            repeated_action_limit=self.settings.repeated_action_limit,
         )
 
     def _register_tools(self) -> None:
@@ -102,6 +128,107 @@ class Cato:
             )
         )
         registrations = [
+            ToolDefinition(
+                "project_discover",
+                "Discover software projects below an approved root.",
+                partial(discover_projects, approved_roots=self.settings.approved_roots),
+                {
+                    "root": ToolArgument(str),
+                    "query": ToolArgument(str, False),
+                    "max_depth": ToolArgument(int, False),
+                    "max_results": ToolArgument(int, False),
+                },
+            ),
+            ToolDefinition(
+                "project_inspect",
+                "Inspect project type, structure, test command, and Git state.",
+                partial(inspect_project, approved_roots=self.settings.approved_roots),
+                {"path": ToolArgument(str)},
+            ),
+            ToolDefinition(
+                "git_inspect",
+                "Read the branch, working tree state, and recent commits.",
+                partial(git_inspect, approved_roots=self.settings.approved_roots),
+                {"path": ToolArgument(str)},
+            ),
+            ToolDefinition(
+                "project_run_tests",
+                "Run configured Python tests with bounded output and runtime.",
+                partial(
+                    run_project_tests,
+                    approved_roots=self.settings.approved_roots,
+                    timeout=min(self.settings.max_agent_runtime_seconds, 600),
+                    max_output_bytes=self.settings.max_command_output_bytes,
+                ),
+                {
+                    "path": ToolArgument(str),
+                    "target": ToolArgument(str, False),
+                },
+                False,
+                "high",
+                "system",
+                True,
+            ),
+            ToolDefinition(
+                "project_run_lint",
+                "Run configured Ruff checks with bounded output and runtime.",
+                partial(
+                    run_project_lint,
+                    approved_roots=self.settings.approved_roots,
+                    timeout=min(self.settings.max_agent_runtime_seconds, 600),
+                    max_output_bytes=self.settings.max_command_output_bytes,
+                ),
+                {"path": ToolArgument(str)},
+                True,
+                "medium",
+                "system",
+                True,
+            ),
+            ToolDefinition(
+                "source_apply_patch",
+                "Replace one exact source fragment after hash and worktree checks.",
+                partial(
+                    apply_text_patch,
+                    approved_roots=self.settings.approved_roots,
+                ),
+                {
+                    "path": ToolArgument(str),
+                    "old_text": ToolArgument(str),
+                    "new_text": ToolArgument(str),
+                    "expected_sha256": ToolArgument(str, False),
+                },
+                False,
+                "high",
+                "write",
+                True,
+            ),
+            ToolDefinition(
+                "source_apply_patch_set",
+                "Atomically apply a validated multi-file patch set with checkpoints.",
+                partial(apply_patch_set, approved_roots=self.settings.approved_roots),
+                {
+                    "workspace": ToolArgument(str),
+                    "task_id": ToolArgument(str),
+                    "operations": ToolArgument(list),
+                    "dry_run": ToolArgument(bool, False),
+                },
+                False,
+                "high",
+                "write",
+                True,
+            ),
+            ToolDefinition(
+                "source_rollback_patch_set",
+                "Rollback only unchanged Cato-owned transactional edits.",
+                partial(
+                    rollback_patch_set, approved_roots=self.settings.approved_roots
+                ),
+                {"workspace": ToolArgument(str), "task_id": ToolArgument(str)},
+                False,
+                "high",
+                "write",
+                True,
+            ),
             ToolDefinition(
                 "filesystem_list",
                 "List entries in an approved directory.",
@@ -190,8 +317,54 @@ class Cato:
         ]
         for tool in registrations:
             self.tools.register(tool)
+        if self.long_term_memory is not None:
+            self.tools.register(
+                ToolDefinition(
+                    "memory_store",
+                    "Store a durable non-secret user preference or project fact.",
+                    self._memory_store,
+                    {
+                        "kind": ToolArgument(str),
+                        "content": ToolArgument(str),
+                        "importance": ToolArgument(int, False),
+                    },
+                    False,
+                    "medium",
+                    "write",
+                )
+            )
+            self.tools.register(
+                ToolDefinition(
+                    "memory_search",
+                    "Search durable non-secret memory.",
+                    self._memory_search,
+                    {
+                        "query": ToolArgument(str),
+                        "kind": ToolArgument(str, False),
+                        "limit": ToolArgument(int, False),
+                    },
+                )
+            )
         if self.macos is not None:
             self._register_macos_tools(self.macos)
+
+    def _memory_store(self, kind: str, content: str, importance: int = 5) -> ToolResult:
+        assert self.long_term_memory is not None
+        try:
+            record = self.long_term_memory.store(kind, content, importance=importance)
+        except MemoryRefused as error:
+            return ToolResult.failure(str(error), code="memory_refused")
+        return ToolResult.success(asdict(record), summary="Memory stored.")
+
+    def _memory_search(
+        self, query: str, kind: str | None = None, limit: int = 10
+    ) -> ToolResult:
+        assert self.long_term_memory is not None
+        records = self.long_term_memory.search(query, kind=kind, limit=limit)
+        return ToolResult.success(
+            [asdict(record) for record in records],
+            summary=f"Found {len(records)} memories.",
+        )
 
     def _register_macos_tools(self, macos: MacOSController) -> None:
         registrations = [
@@ -341,19 +514,42 @@ class Cato:
         self.memory.save(session)
         return result
 
+    def execute_task(self, task: AgentTask) -> RunResult:
+        session = self.memory.get(task.session_id)
+        if session is None:
+            session = Session(
+                id=task.session_id, history_limit=self.settings.history_limit
+            )
+        result = self.runtime.run(task.original_request, session, task=task)
+        self.memory.save(session)
+        return result
+
     def respond(self, command: str, *, session_id: str | None = None) -> str:
         return self.run(command, session_id=session_id).response
 
     def approve(self, approval_id: str, session_id: str) -> RunResult:
         session = self.memory.get(session_id)
         if session is None:
-            return RunResult("Session not found.", "invalid_session", session_id, 0)
+            session = Session(id=session_id, history_limit=self.settings.history_limit)
         decision = self.approvals.approve(approval_id, session_id)
         if not decision.ok or decision.approval is None:
             return RunResult(
                 "Approval could not be used.", decision.code, session_id, 0
             )
         pending = decision.approval
+        bound_task = self.tasks.get(pending.task_id) if pending.task_id else None
+        if pending.task_id and (
+            bound_task is None
+            or bound_task.session_id != session_id
+            or bound_task.status != TaskStatus.WAITING_FOR_APPROVAL
+        ):
+            pending.redact()
+            return RunResult(
+                "Approval is no longer bound to a waiting task.",
+                "approval_task_mismatch",
+                session_id,
+                0,
+            )
         arguments = dict(pending.arguments)
         request = pending.request
         result = self.tools.run(pending.tool, **arguments)
@@ -375,13 +571,25 @@ class Cato:
     def deny(self, approval_id: str, session_id: str) -> RunResult:
         session = self.memory.get(session_id)
         if session is None:
-            return RunResult("Session not found.", "invalid_session", session_id, 0)
+            session = Session(id=session_id, history_limit=self.settings.history_limit)
         decision = self.approvals.deny(approval_id, session_id)
         if not decision.ok:
             return RunResult(
                 "Approval could not be denied.", decision.code, session_id, 0
             )
         session.status = "denied"
+        for task in self.tasks.list(session_id=session_id):
+            if task.status == TaskStatus.WAITING_FOR_APPROVAL:
+                task.status = TaskStatus.CANCELLED
+                task.summary = "The pending action was denied."
+                task.add_step(
+                    kind="approval",
+                    status="denied",
+                    summary="Human approval was denied.",
+                )
+                self.tasks.save(task)
+                self.tasks.append_event(task.id, "approval_denied", {})
+                break
         session.add("assistant", "The pending action was denied and was not executed.")
         self.memory.save(session)
         return RunResult(
@@ -401,6 +609,15 @@ def configure_logging(level: str) -> None:
 
 def main() -> None:
     mode = sys.argv[1].lower() if len(sys.argv) > 1 else "chat"
+    if mode in {"-h", "--help", "help"}:
+        print(
+            "Usage: cato [chat|voice|health|doctor|status|tools|server|run|tasks|task|"
+            "--version]"
+        )
+        return
+    if mode in {"-v", "--version", "version"}:
+        print(f"Cato {VERSION}")
+        return
     try:
         settings = Settings.load(require_api_key=mode in {"chat", ""})
         configure_logging(settings.log_level)
@@ -443,12 +660,106 @@ def main() -> None:
         except (ValueError, ConfigurationError) as error:
             print(f"Health check failed: {error}")
         return
+    if mode == "doctor":
+        memory_parent = settings.memory_path.parent if settings.memory_path else None
+        existing_memory_parent = memory_parent
+        while (
+            existing_memory_parent is not None and not existing_memory_parent.exists()
+        ):
+            if existing_memory_parent.parent == existing_memory_parent:
+                existing_memory_parent = None
+                break
+            existing_memory_parent = existing_memory_parent.parent
+        checks = {
+            "provider": bool(settings.gemini_api_key),
+            "approved_roots": all(path.is_dir() for path in settings.approved_roots),
+            "memory_parent": existing_memory_parent is not None
+            and existing_memory_parent.is_dir()
+            and os.access(existing_memory_parent, os.W_OK),
+            "git": shutil.which("git") is not None,
+            "macos": platform.system() == "Darwin",
+            "task_database": settings.task_database_path is not None,
+        }
+        for name, ok in checks.items():
+            print(f"{name}: {'ok' if ok else 'unavailable'}")
+        print(f"overall: {'ready' if all(checks.values()) else 'attention needed'}")
+        return
+    if mode == "tools":
+        from core.llm.fake import FakeModelProvider
+
+        instance = Cato(provider=FakeModelProvider([]), settings=settings)
+        for schema in instance.tools.schemas():
+            print(f"{schema['name']}: {schema['description']}")
+        return
+    if mode == "server":
+        import uvicorn
+
+        uvicorn.run(
+            "core.api:create_app",
+            factory=True,
+            host=settings.api_host,
+            port=settings.api_port,
+        )
+        return
+    if mode in {"run", "tasks", "task", "status"}:
+        from client.api_client import APIError, HTTPAgentClient
+
+        client = HTTPAgentClient(settings.voice_client_api_url)
+        try:
+            if mode == "status":
+                result = client.status()
+                print(f"Server: {result.get('server')}")
+                print(f"Workers: {len(result.get('workers', []))}")
+                print(f"Schedules: {result.get('schedules', 0)}")
+                print(
+                    f"Auth: {'enabled' if result.get('auth_enabled') else 'disabled'}"
+                )
+                for state, count in result.get("tasks", {}).items():
+                    print(f"Tasks {state}: {count}")
+            elif mode == "run":
+                request = " ".join(sys.argv[2:]).strip()
+                if not request:
+                    print('Usage: cato run "task request"')
+                    return
+                submitted = client.submit_task(request)
+                print(f"Task submitted: {submitted['task_id']}")
+            elif mode == "tasks":
+                status = sys.argv[2] if len(sys.argv) > 2 else None
+                for task in client.tasks(status):
+                    print(
+                        f"{task['id']}  {task['status']}  {task.get('summary') or ''}"
+                    )
+            else:
+                if len(sys.argv) < 3:
+                    print("Usage: cato task <id> [events|cancel|retry]")
+                    return
+                task_id = sys.argv[2]
+                action = sys.argv[3] if len(sys.argv) > 3 else "show"
+                if action in {"--watch", "watch"}:
+                    for event in client.stream_task_events(task_id):
+                        print(f"{event.get('id', '-')}  {event.get('type', 'event')}")
+                elif action == "events":
+                    for event in client.task_events(task_id):
+                        print(f"{event['id']}  {event['type']}")
+                elif action in {"cancel", "retry"}:
+                    result = client.task_action(task_id, action)
+                    print(f"{result['task_id']}  {result['status']}")
+                else:
+                    task = client.task(task_id)
+                    print(f"{task['id']}  {task['status']}")
+                    print(task.get("summary") or "No result yet.")
+        except APIError as error:
+            print(f"Cato API error: {error}")
+        return
     if mode not in {"chat", ""}:
-        print("Usage: cato [chat|voice|health]")
+        print(
+            "Usage: cato [chat|voice|health|doctor|status|tools|server|run|tasks|task|"
+            "--version]"
+        )
         return
 
     cato = Cato(settings=settings)
-    print("Cato v0.9.1")
+    print(f"Cato v{VERSION}")
     print("Type 'exit' to shut down.\n")
     while True:
         try:

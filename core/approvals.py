@@ -79,8 +79,11 @@ class ApprovalStore:
         self._connection: sqlite3.Connection | None = None
         if self.path is not None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self._connection = sqlite3.connect(self.path, check_same_thread=False)
+            self._connection = sqlite3.connect(
+                self.path, timeout=5.0, check_same_thread=False
+            )
             self._connection.row_factory = sqlite3.Row
+            self._connection.execute("PRAGMA busy_timeout=5000")
             self._connection.execute("PRAGMA journal_mode=WAL")
             self._migrate()
 

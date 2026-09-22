@@ -19,3 +19,7 @@ The child environment removes variables whose names indicate tokens, passwords,
 API keys, private keys, or secrets. The Gemini provider is reconstructed from
 explicit settings before sanitization; project subprocesses do not inherit the
 provider credential.
+
+SQLite-backed stores use WAL mode and a bounded five-second busy timeout so brief
+parent/child write overlap waits instead of failing immediately. A server shutdown
+marks active work as interrupted, rather than crashed, so it can be retried safely.

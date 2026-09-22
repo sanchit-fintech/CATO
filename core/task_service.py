@@ -189,6 +189,8 @@ class TaskService:
                 "task_cancelled" if reason == "cancelled" else "process_timeout",
                 {},
             )
+        elif reason == "server_shutdown" and current is not None:
+            self._mark_interrupted(task.id, "server_shutdown")
         elif current is not None and current.status not in TERMINAL_STATUSES | {
             TaskStatus.WAITING_FOR_APPROVAL
         }:
@@ -242,3 +244,13 @@ class TaskService:
         task.summary = "The isolated task process failed safely."
         self.tasks.save(task)
         self.tasks.append_event(task.id, "task_failed", {"error_code": error_code})
+
+    def _mark_interrupted(self, task_id: str, reason: str) -> None:
+        task = self.tasks.get(task_id)
+        if task is None or task.status in TERMINAL_STATUSES:
+            return
+        task.status = TaskStatus.INTERRUPTED
+        task.worker_id = None
+        task.summary = "Task execution was interrupted by a safe server shutdown."
+        self.tasks.save(task)
+        self.tasks.append_event(task.id, "task_interrupted", {"reason": reason})

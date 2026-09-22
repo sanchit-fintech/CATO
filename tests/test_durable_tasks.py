@@ -10,6 +10,7 @@ from core.api import create_app
 from core.cato import Cato
 from core.config import Settings
 from core.llm.fake import FakeModelProvider
+from core.task_service import TaskService
 from core.tasks import TaskStatus, TaskStore
 
 
@@ -136,3 +137,40 @@ def test_workspace_write_lock_is_exclusive(tmp_path: Path) -> None:
     assert not store.acquire_workspace_lock(str(tmp_path), second.id, "write")
     assert store.release_workspace_lock(str(tmp_path), first.id)
     assert store.acquire_workspace_lock(str(tmp_path), second.id, "write")
+
+
+def test_task_store_waits_briefly_for_multi_process_database_locks(
+    tmp_path: Path,
+) -> None:
+    store = TaskStore(path=tmp_path / "tasks.sqlite3")
+    assert store._connection is not None
+    timeout = store._connection.execute("PRAGMA busy_timeout").fetchone()[0]
+    assert timeout == 5000
+
+
+def test_safe_server_shutdown_leaves_task_retriable(tmp_path: Path) -> None:
+    settings = Settings(
+        None,
+        "fake",
+        (tmp_path,),
+        "INFO",
+        task_database_path=tmp_path / "tasks.sqlite3",
+    )
+    cato = Cato(
+        provider=FakeModelProvider(responses=["unused"]),
+        settings=settings,
+        platform_system="Linux",
+    )
+    task = cato.tasks.create("session", "inspect", status=TaskStatus.QUEUED)
+    assert cato.tasks.claim_next("supervisor-test") is not None
+
+    TaskService(cato)._mark_interrupted(task.id, "server_shutdown")
+
+    interrupted = cato.tasks.get(task.id)
+    assert interrupted is not None
+    assert interrupted.status == TaskStatus.INTERRUPTED
+    assert interrupted.worker_id is None
+    assert cato.tasks.retry(task.id)
+    retried = cato.tasks.get(task.id)
+    assert retried is not None
+    assert retried.status == TaskStatus.QUEUED
